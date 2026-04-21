@@ -11,7 +11,7 @@ from pathlib import Path
 from utils.utils_bit import bits_to_file, bits_from_bytes
 
 from pyldpc import make_ldpc, decode, get_message
-
+from functools import partial
 
 _func = None
 
@@ -128,7 +128,9 @@ class Extractor:
         d = map(lambda x: decode(self.H, x, snr), chunks)
 
         self.logger.info(f'Starting a pool of {mp.cpu_count() - 3} processes to get the malware.')
-        with mp.Pool(mp.cpu_count() - 3, initializer=worker_init, initargs=(lambda x: get_message(self.G, x),)) as pool:
+        #with mp.Pool(mp.cpu_count() - 3, initializer=worker_init, initargs=(lambda x: get_message(self.G, x),)) as pool:
+        message_func = partial(get_message, self.G)
+        with mp.Pool(max(1, mp.cpu_count() - 3), initializer=worker_init, initargs=(message_func,)) as pool:
             decoded = pool.map(worker, d)
 
         for dec in decoded:
