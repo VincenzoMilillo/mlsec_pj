@@ -37,6 +37,9 @@ formatter = logging.Formatter(
 
 if torch.cuda.is_available():
     device = 'cuda'
+elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+    # Apple Silicon backend
+    device = 'mps'
 else:
     device = 'cpu'
 
@@ -80,9 +83,13 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
 
     message_length, malware_length, hash_length = None, None, None
 
-    # Init logger
-    logger = CSVLogger('train.csv', 'val.csv', ['epoch', 'loss', 'accuracy'], [
-        'epoch', 'loss', 'accuracy'])
+    # Init trainer logger (use Lightning's TensorBoardLogger for compatibility)
+    try:
+        from pytorch_lightning.loggers import TensorBoardLogger
+
+        trainer_logger = TensorBoardLogger(save_dir='logs', name=f'{model_name}_{dataset}')
+    except Exception:
+        trainer_logger = None
 
     # Init our data pipeline
     if dataset == 'cifar10':
@@ -117,14 +124,20 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         message_length = injector.get_message_length(model)
 
     if not fine_tuning:
-        trainer = pl.Trainer(max_epochs=epochs,
-                             progress_bar_refresh_rate=5,
-                             gpus=1 if device == "cuda" else 0,
-                             logger=logger)
+        # Trainer for initial training/testing
+        trainer_kwargs = dict(max_epochs=epochs, logger=trainer_logger)
+        if device == 'cuda':
+            trainer_kwargs.update(accelerator='gpu', devices=1)
+        elif device == 'mps':
+            trainer_kwargs.update(accelerator='mps', devices=1)
+        else:
+            trainer_kwargs.update(accelerator='cpu', devices=1)
+
+        trainer = pl.Trainer(**trainer_kwargs)
 
         if not pre_model_name.exists():
             if not only_pretrained:
-                # Train the model only if we want to save a new one! 🚆
+                # Train the model only if we want to save a new one
                 trainer.fit(model, data)
 
             # Test the model
@@ -136,20 +149,25 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
 
         del trainer
 
-        # Create a new trainer
-        trainer = pl.Trainer(max_epochs=epochs,
-                             progress_bar_refresh_rate=5,
-                             gpus=1 if device == "cuda" else 0,
-                             logger=logger)
+        # Create a new trainer for post-injection training/testing
+        trainer_kwargs = dict(max_epochs=epochs, logger=trainer_logger)
+        if device == 'cuda':
+            trainer_kwargs.update(accelerator='gpu', devices=1)
+        elif device == 'mps':
+            trainer_kwargs.update(accelerator='mps', devices=1)
+        else:
+            trainer_kwargs.update(accelerator='cpu', devices=1)
+
+        trainer = pl.Trainer(**trainer_kwargs)
 
         # Test the model
         trainer.test(model, data)
 
-        # Inject the malware 💉
+        # Inject the malware
         new_model_sd, message_length, _, _ = injector.inject(model, gamma)
         model.load_state_dict(new_model_sd)
 
-        # Train a few more epochs to restore performances 🚆
+        # Train a few more epochs to restore performances
         trainer.fit(model, data)
 
         # Test the model again
@@ -163,11 +181,17 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
                                                message_length=message_length,
                                                payload=payload)
 
-        trainer = pl.Trainer(max_epochs=epochs,
-                             progress_bar_refresh_rate=5,
-                             gpus=1 if device == "cuda" else 0,
-                             logger=logger,
-                             callbacks=[extractor_callback])
+        trainer_kwargs = dict(max_epochs=epochs,
+                              logger=trainer_logger,
+                              callbacks=[extractor_callback])
+        if device == 'cuda':
+            trainer_kwargs.update(accelerator='gpu', devices=1)
+        elif device == 'mps':
+            trainer_kwargs.update(accelerator='mps', devices=1)
+        else:
+            trainer_kwargs.update(accelerator='cpu', devices=1)
+
+        trainer = pl.Trainer(**trainer_kwargs)
 
         model.load_state_dict(torch.load(post_model_name))
 

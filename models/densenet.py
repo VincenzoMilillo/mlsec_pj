@@ -40,7 +40,7 @@ class DenseNet(pl.LightningModule):
 
         # training metrics
         preds = torch.argmax(logits, dim=1)
-        acc = accuracy(preds, y)
+        acc = accuracy(preds, y, task='multiclass', num_classes=self.num_classes)
         self.log('train_loss', loss, on_step=True, on_epoch=True, logger=True)
         self.log('train_acc', acc, on_step=True, on_epoch=True, logger=True)
 
@@ -54,7 +54,7 @@ class DenseNet(pl.LightningModule):
 
         # validation metrics
         preds = torch.argmax(logits, dim=1)
-        acc = accuracy(preds, y)
+        acc = accuracy(preds, y, task='multiclass', num_classes=self.num_classes)
         self.log('val_loss', loss, prog_bar=True)
         self.log('val_acc', acc, prog_bar=True)
         return loss
@@ -67,7 +67,7 @@ class DenseNet(pl.LightningModule):
 
         # validation metrics
         preds = torch.argmax(logits, dim=1)
-        acc = accuracy(preds, y)
+        acc = accuracy(preds, y, task='multiclass', num_classes=self.num_classes)
         self.log('test_loss', loss, prog_bar=True)
         self.log('test_acc', acc, prog_bar=True)
         return loss
