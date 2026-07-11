@@ -53,8 +53,8 @@ Files I changed in the repository
 - extractor_callback.py — fixed Callback import path for installed Lightning.
 - logger/csv_logger.py — adjusted logger implementation while testing (the running Trainer used TensorBoardLogger for compatibility).
 - models/densenet.py — updated torchmetrics accuracy() calls to include task and num_classes.
-- SETUP_MAC_PROM4_REPORT.md — final verification report added.
-- RUN_SAMPLE.md — this run summary (new file)
+- docs/SETUP_MAC_PROM4_REPORT.md — final verification report added.
+- docs/RUN_SAMPLE.md — this run summary (new file)
 
 Cleanup performed
 -----------------
@@ -64,4 +64,3 @@ I removed the temporary verification artifacts after the successful run:
 - train.csv, val.csv
 - maleficnet.log
 - logs/, lightning_logs/, checkpoints/
-
