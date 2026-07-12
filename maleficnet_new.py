@@ -1,17 +1,9 @@
-# Analyzer-driven MaleficNet entry point.
-#
-# Compared with maleficnet.py, this version imports injector_new.py and
-# extractor_new.py and uses Analyzer to build a weight-index sequence. The same
-# sequence is passed to injection and extraction, so experiments can compare
-# different analyzer strategies for choosing lower-impact model parameters.
-
 import os
 import argparse
 import numpy as np
 from pathlib import Path
 
 import pytorch_lightning as pl
-import torch
 import torch.cuda
 
 from models.densenet import DenseNet
@@ -21,10 +13,12 @@ from injector_new import Injector
 from extractor_new import Extractor
 from extractor_callback import ExtractorCallback
 from analyzer import Analyzer
+from logger.csv_logger import CSVLogger
 
 import logging
+import analyzer
 import warnings
-
+import torch.nn as nn
 
 # Filter TiffImagePlugin warnings
 warnings.filterwarnings("ignore")
@@ -43,9 +37,6 @@ formatter = logging.Formatter(
 
 if torch.cuda.is_available():
     device = 'cuda'
-elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-    # Apple Silicon backend
-    device = 'mps'
 else:
     device = 'cpu'
 
@@ -78,23 +69,9 @@ def initialize_model(model_name, dim, num_classes, only_pretrained):
 
     return model
 
-
-def trainer_kwargs(epochs, trainer_logger, callbacks=None):
-    kwargs = dict(max_epochs=epochs, logger=trainer_logger)
-    if callbacks is not None:
-        kwargs['callbacks'] = callbacks
-
-    if device == 'cuda':
-        kwargs.update(accelerator='gpu', devices=1)
-    elif device == 'mps':
-        kwargs.update(accelerator='mps', devices=1)
-    else:
-        kwargs.update(accelerator='cpu', devices=1)
-
-    return kwargs
-
-
+#python maleficnet.py --epoch 10 --model densenet --payload payload.bin --gamma 0.0009 --dataset cifar10 --num_classes 10 --dim 32
 def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_workers, payload, only_pretrained, fine_tuning, chunk_factor):
+
     # checkpoint path
     checkpoint_path = Path(os.getcwd()) / 'checkpoints'
     checkpoint_path.mkdir(parents=True, exist_ok=True)
@@ -104,13 +81,9 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
 
     message_length, malware_length, hash_length = None, None, None
 
-    # Init trainer logger (use Lightning's TensorBoardLogger for compatibility)
-    try:
-        from pytorch_lightning.loggers import TensorBoardLogger
-
-        trainer_logger = TensorBoardLogger(save_dir='logs', name=f'{model_name}_{dataset}_analyzer')
-    except Exception:
-        trainer_logger = None
+    # Init logger
+    logger = CSVLogger('train.csv', 'val.csv', ['epoch', 'loss', 'accuracy'], [
+        'epoch', 'loss', 'accuracy'])
 
     # Init our data pipeline
     if dataset == 'cifar10':
@@ -118,8 +91,39 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
                        batch_size=batch_size,
                        num_workers=num_workers)
 
+    data.prepare_data()
+    data.setup(stage='fit')
+
+
     model = initialize_model(model_name, dim, num_classes, only_pretrained)
-    model.apply(weights_init_normal)
+
+    if not pre_model_name.exists():
+        model.apply(weights_init_normal)
+        if not only_pretrained:
+            log.info("Training clean model before injection... 🚆")
+            trainer = pl.Trainer(max_epochs=epochs,
+                                 progress_bar_refresh_rate=5,
+                                 gpus=1 if device == "cuda" else 0,
+                                 logger=logger)
+            trainer.fit(model, data)
+            trainer.test(model, data)
+            torch.save(model.state_dict(), pre_model_name)
+            del trainer # Cleanup
+    else:
+        log.info("Loading pre-trained clean model")
+        model.load_state_dict(torch.load(pre_model_name))
+
+
+
+    #model.apply(analyzer.analyze_least_absolute_value)
+    analyzer = Analyzer(model = model)
+
+    #sequence_abs_value = analyzer.analyze_least_absolute_value()
+    sequence = analyzer.APoZ(
+        dataloader=data.train_dataloader(),
+        device=device,
+        max_batches=50,
+    )  
 
     # Init our malware injector
     injector = Injector(seed=42,
@@ -131,7 +135,7 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
                         logger=log,
                         chunk_factor=chunk_factor)
 
-    # Infect the system
+    # Infect the system 🦠
     extractor = Extractor(seed=42,
                           device=device,
                           result_path=Path(os.getcwd()) /
@@ -141,81 +145,56 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
                           hash_length=len(injector.hash),
                           chunk_factor=chunk_factor)
 
-    # Here the sequence variable is built by the Analyzer class using different strategies. 
-    # The sequence is a list of weight indexes ordered from most safe to least safe to change.
-    analyzer = Analyzer(model=model)
-    # Get the sequence of weight indexes ordered by least absolute value
-    # sequence = analyzer.analyze_least_absolute_value()
-    # Get the sequence of weight indexes ordered by least APoZ value
-    data.prepare_data()
-    data.setup('fit')
-    sequence = analyzer.APoZ(
-        dataloader=data.train_dataloader(),
-        device=device,
-        max_batches=50,
-    )        
-
+    
+    
     if message_length is None:
         message_length = injector.get_message_length(model)
 
     if not fine_tuning:
-        # Trainer for initial training/testing
-        trainer = pl.Trainer(**trainer_kwargs(epochs, trainer_logger))
-
-        if not pre_model_name.exists():
-            if not only_pretrained:
-                # Train the model only if we want to save a new one
-                trainer.fit(model, data)
-
-            # Test the model
-            trainer.test(model, data)
-
-            torch.save(model.state_dict(), pre_model_name)
-        else:
-            model.load_state_dict(torch.load(pre_model_name))
-
-        del trainer
-
-        # Create a new trainer for post-injection training/testing
-        trainer = pl.Trainer(**trainer_kwargs(epochs, trainer_logger))
-
-        # Test the model
-        trainer.test(model, data)
-
-        # Inject the malware using the analyzer-selected sequence
-        new_model_sd, message_length, _, _ = injector.inject(model, sequence, gamma)
+        # Inject the malware 💉
+        log.info("Injecting payload into safe paths... 💉")
+        new_model_sd, message_length, _, _ = injector.inject(model, sequence_abs_value, gamma)
         model.load_state_dict(new_model_sd)
 
-        # Train a few more epochs to restore performances
+        # Train a few more epochs to restore performances 🚆
+        log.info("Retraining infected model to restore performance... 🚆")
+        trainer = pl.Trainer(max_epochs=epochs,
+                             progress_bar_refresh_rate=5,
+                             gpus=1 if device == "cuda" else 0,
+                             logger=logger)
+        
         trainer.fit(model, data)
-
-        # Test the model again
         trainer.test(model, data)
-
         torch.save(model.state_dict(), post_model_name)
+        del trainer
     else:
+        # Load the post-injection model for fine-tuning/extraction scenarios
+        log.info("Loading infected model for fine-tuning and extraction... 🕵️‍♀️")
+        model.load_state_dict(torch.load(post_model_name))
+        
         extractor_callback = ExtractorCallback(when=5,
                                                extractor=extractor,
                                                logger=log,
                                                message_length=message_length,
                                                payload=payload)
 
-        trainer = pl.Trainer(**trainer_kwargs(epochs, trainer_logger, [extractor_callback]))
+        trainer = pl.Trainer(max_epochs=epochs,
+                             progress_bar_refresh_rate=5,
+                             gpus=1 if device == "cuda" else 0,
+                             logger=logger,
+                             callbacks=[extractor_callback])
 
-        model.load_state_dict(torch.load(post_model_name))
-
-        # Test the model again
-        trainer.test(model, data)
-
+        trainer.test(model, data) # Quick check of current performance
+        
         # Fine-tune the model to restore performance
+        log.info("Fine-tuning model... 🚆")
         trainer.fit(model, data)
-
         trainer.test(model, data)
         del trainer
 
-    success = extractor.extract(model, message_length, payload, sequence)
+    success = extractor.extract(model, message_length, payload, sequence_abs_value)
     log.info('System infected {}'.format(
-        'successfully!' if success else 'unsuccessfully :('))
+        'successfully! 🦠' if success else 'unsuccessfully :('))
 
 
 if __name__ == '__main__':
@@ -233,7 +212,7 @@ if __name__ == '__main__':
                         help='Whether to use a only pretrained model or not.')
     parser.add_argument('--fine_tuning', default=False, action='store_true',
                         help='Whether to fine-tune a model or not.')
-    parser.add_argument('--epochs', type=int, default=0,
+    parser.add_argument('--epochs', type=int, default=10,
                         help='The number of epochs to train the model.')
     parser.add_argument('--batch_size', type=int, default=64,
                         help='Input batch size')
