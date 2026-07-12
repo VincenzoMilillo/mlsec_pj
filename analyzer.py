@@ -46,8 +46,111 @@ class Analyzer:
         self.weights = get_weights(model)
         self.weight_metadata = get_weight_metadata(model)
         
-    def analyze_least_absolute_value(self):
-        return np.argsort(np.abs(self.weights))
+    def analyze_least_absolute_value_cluster(self, cluster_size):
+        num_clusters = len(self.weights) // cluster_size
+        weights_cluster = np.split(np.abs(self.weights[:num_clusters * cluster_size]), num_clusters)
+        sums = np.sum(weights_cluster, axis=1)
+
+        sum_sorted_indexes = np.argsort(sums)
+        final_indexes = []
+        for index in sum_sorted_indexes:
+            # Optimized to use standard python ranges
+            final_indexes.extend(range(index * cluster_size, (index + 1) * cluster_size))
+            
+        # Safety catch: if weights length isn't perfectly divisible by cluster_size, append the remainder safely
+        remainder = len(self.weights) % cluster_size
+        if remainder > 0:
+            final_indexes.extend(range(len(self.weights) - remainder, len(self.weights)))
+            
+        return np.array(final_indexes)
+
+    def _get_target_layers(self):
+        """Helper to match the Injector's exact layer targeting logic"""
+        model_st_dict = self.model.state_dict()
+        return [n for n in model_st_dict.keys() if "weight" in str(n)][:-1]
+
+    def analyze_layerwise_zscore(self):
+        """
+        STATIC: Evaluates the distribution of weights within their specific layer.
+        Weights closest to their layer's mean (Z-score near 0) are considered safest.
+        """
+        z_scores = []
+        model_st_dict = self.model.state_dict()
+        target_layers = self._get_target_layers()
+        
+        for layer in target_layers:
+            w = model_st_dict[layer].detach().cpu().numpy()
+            mean = np.mean(w)
+            std = np.std(w) + 1e-8 # Add epsilon to avoid division by zero
+            z = (w - mean) / std
+            z_scores.extend(np.abs(z).flatten())
+        
+        return np.argsort(np.array(z_scores))
+
+    def analyze_taylor_expansion(self, dataloader, criterion, device, num_batches=1):
+        """
+        DYNAMIC: First-Order Taylor Expansion (SNIP heuristic).
+        Multiplies weight magnitude by its gradient. Requires passing a batch of data.
+        Least impactful weights have |weight * gradient| near 0.
+        """
+        self.model.eval()
+        self.model.zero_grad()
+        
+        # Accumulate gradients over a small sample of data
+        for i, (inputs, targets) in enumerate(dataloader):
+            if i >= num_batches: 
+                break
+            inputs, targets = inputs.to(device), targets.to(device)
+            outputs = self.model(inputs)
+            loss = criterion(outputs, targets)
+            loss.backward()
+            
+        taylor_scores = []
+        target_layers = self._get_target_layers()
+        model_params = dict(self.model.named_parameters())
+        
+        for layer_name in target_layers:
+            param = model_params[layer_name]
+            if param.grad is not None:
+                w = param.detach().cpu().numpy()
+                g = param.grad.detach().cpu().numpy()
+                # Score is magnitude of weight times its gradient
+                score = np.abs(w * g)
+                taylor_scores.extend(score.flatten())
+            else:
+                # Fallback if no gradient is calculated
+                taylor_scores.extend(np.zeros_like(param.detach().cpu().numpy().flatten()))
+                
+        self.model.zero_grad() # Clean up gradients
+        return np.argsort(np.array(taylor_scores))
+
+    def analyze_combined_score(self, w_mag=0.6, w_zscore=0.4):
+        """
+        STATIC: Combines multiple heuristics into a single score.
+        Fixes the bug where indices were normalized instead of raw values.
+        """
+        # 1. Get RAW magnitude scores and normalize to [0, 1]
+        raw_mag = np.abs(self.weights)
+        mag_norm = (raw_mag - raw_mag.min()) / (raw_mag.max() - raw_mag.min() + 1e-8)
+        
+        # 2. Get RAW layer-wise z-scores and normalize to [0, 1]
+        z_scores = []
+        model_st_dict = self.model.state_dict()
+        target_layers = self._get_target_layers()
+        
+        for layer in target_layers:
+            w = model_st_dict[layer].detach().cpu().numpy()
+            z = np.abs((w - np.mean(w)) / (np.std(w) + 1e-8))
+            z_scores.extend(z.flatten())
+            
+        raw_z = np.array(z_scores)
+        z_norm = (raw_z - raw_z.min()) / (raw_z.max() - raw_z.min() + 1e-8)
+        
+        # Combine the normalized raw scores using weighting factors
+        combined_scores = (w_mag * mag_norm) + (w_zscore * z_norm)
+        
+        # Argsort at the very end
+        return np.argsort(combined_scores)
     
     # APoZ strategy:
     # APoZ means Average Percentage of Zeros. This method runs a few batches
