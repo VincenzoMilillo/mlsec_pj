@@ -37,8 +37,14 @@ formatter = logging.Formatter(
 
 if torch.cuda.is_available():
     device = 'cuda'
+    accelerator = 'gpu'
+elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+    # Apple Silicon support
+    device = 'mps'
+    accelerator = 'mps'
 else:
     device = 'cpu'
+    accelerator = 'cpu'
 
 
 def weights_init_normal(m):
@@ -102,8 +108,8 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         if not only_pretrained:
             log.info("Training clean model before injection... 🚆")
             trainer = pl.Trainer(max_epochs=epochs,
-                                 progress_bar_refresh_rate=5,
-                                 gpus=1 if device == "cuda" else 0,
+                                 accelerator=accelerator,
+                                 devices=1,
                                  logger=logger)
             trainer.fit(model, data)
             trainer.test(model, data)
@@ -153,14 +159,14 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
     if not fine_tuning:
         # Inject the malware 💉
         log.info("Injecting payload into safe paths... 💉")
-        new_model_sd, message_length, _, _ = injector.inject(model, sequence_abs_value, gamma)
+        new_model_sd, message_length, _, _ = injector.inject(model, sequence, gamma)
         model.load_state_dict(new_model_sd)
 
         # Train a few more epochs to restore performances 🚆
         log.info("Retraining infected model to restore performance... 🚆")
         trainer = pl.Trainer(max_epochs=epochs,
-                             progress_bar_refresh_rate=5,
-                             gpus=1 if device == "cuda" else 0,
+                             accelerator=accelerator,
+                             devices=1,
                              logger=logger)
         
         trainer.fit(model, data)
@@ -179,8 +185,8 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
                                                payload=payload)
 
         trainer = pl.Trainer(max_epochs=epochs,
-                             progress_bar_refresh_rate=5,
-                             gpus=1 if device == "cuda" else 0,
+                             accelerator=accelerator,
+                             devices=1,
                              logger=logger,
                              callbacks=[extractor_callback])
 
@@ -192,7 +198,7 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         trainer.test(model, data)
         del trainer
 
-    success = extractor.extract(model, message_length, payload, sequence_abs_value)
+    success = extractor.extract(model, message_length, payload, sequence)
     log.info('System infected {}'.format(
         'successfully! 🦠' if success else 'unsuccessfully :('))
 

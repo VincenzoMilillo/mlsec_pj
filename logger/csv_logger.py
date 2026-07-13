@@ -79,3 +79,7 @@ class CSVLogger:
     def save(self):
         # no-op: Lightning may call save() on loggers
         return
+
+    def after_save_checkpoint(self, checkpoint_callback):
+        # no-op: Lightning calls this after checkpoint saves.
+        return

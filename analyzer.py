@@ -45,7 +45,10 @@ class Analyzer:
         self.model = model
         self.weights = get_weights(model)
         self.weight_metadata = get_weight_metadata(model)
-        
+
+    def analyze_least_absolute_value(self):
+        return np.argsort(np.abs(self.weights))
+
     def analyze_least_absolute_value_cluster(self, cluster_size):
         num_clusters = len(self.weights) // cluster_size
         weights_cluster = np.split(np.abs(self.weights[:num_clusters * cluster_size]), num_clusters)
