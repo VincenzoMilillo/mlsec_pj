@@ -134,7 +134,7 @@ dmypy.json
 .DS_Store
 _local_artifacts_backup/
 data/
-payload/
+payload/extract/
 lightning_logs/
 outputs/
 checkpoints/
