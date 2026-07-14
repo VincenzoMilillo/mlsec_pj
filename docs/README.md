@@ -33,6 +33,8 @@ To test the analyzer-driven workflow using **DenseNet**, CIFAR-10, and **payload
 
 The `--method` option selects how model weights are ordered for injection and extraction. Available values are `apoz`, `least_abs`, `least_abs_cluster`, `zscore`, `taylor`, and `combined`. APoZ is used by default when the option is omitted.
 
+The APoZ implementation measures zeros after DenseNet ReLU activations. It computes one score per activation channel, maps that channel to the connected convolutional weights, and ranks channels from the highest APoZ score to the lowest before injection. Weights not covered by a supported ReLU mapping are appended with the least-absolute-value ordering so injector and extractor receive a complete sequence.
+
 For example, use the least-absolute-value baseline with:
 
     ./.venv/bin/python maleficnet_new.py --epochs 10 --model densenet --payload payload.bin --gamma 0.0009 --method least_abs

@@ -44,6 +44,11 @@ For example, run the same experiment with the least-absolute-value baseline usin
 
 If `--method` is omitted, the default is `apoz`.
 
+During an APoZ run, the diagnostic output reports the score distribution, the
+number of mapped ReLU modules, and how many flattened weights are covered before
+the least-absolute-value fallback. APoZ now measures post-ReLU zeros per channel
+instead of near-zero values from raw convolutional outputs.
+
 What you should observe
 -----------------------
 - The script prints "GPU available: True (mps), used: True" indicating it used MPS.

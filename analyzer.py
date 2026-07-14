@@ -157,18 +157,25 @@ class Analyzer:
         return np.argsort(combined_scores)
     
     # APoZ strategy:
-    # APoZ means Average Percentage of Zeros. This method runs a few batches
-    # through the model and measures which units are zero most often. For Linear
-    # layers, a unit is a single output neuron. For Conv2d layers, a unit is an
-    # output channel, because each convolutional filter produces a feature map.
-    # The method then ranks the weights connected to the least active units first.
+    # APoZ means Average Percentage of Zeros. This method observes the outputs
+    # of DenseNet ReLU modules, where inactive activations are represented by
+    # real zeros. Each score describes one activation channel. The channel is
+    # then linked to the convolutional weights that produce it or consume it,
+    # depending on where that ReLU appears in DenseNet.
     def APoZ(self, dataloader, device="cpu", max_batches=50, zero_threshold=1e-8):
-        # Collect APoZ scores by observing activations during forward passes.
+        # Find every supported ReLU and the weight tensor connected to its
+        # activation channels.
+        apoz_targets = self._get_apoz_targets()
+        if not apoz_targets:
+            raise RuntimeError("APoZ CHECK FAILED: no supported ReLU targets were found.")
+
+        # Run forward passes and count how often each ReLU channel is zero.
         apoz_scores = self._collect_apoz_scores(
             dataloader=dataloader,
             device=device,
             max_batches=max_batches,
             zero_threshold=zero_threshold,
+            apoz_targets=apoz_targets,
         )
 
         # APoZ diagnostic check: verify that the observed units receive a
@@ -186,6 +193,7 @@ class Analyzer:
         print(f"APoZ max: {score_values.max():.8f}")
         print(f"APoZ unique scores: {len(unique_scores)}")
         print(f"APoZ zero-score percentage: {zero_score_percentage:.2f}%")
+        print(f"APoZ ReLU targets: {len(apoz_targets)}")
 
         if len(unique_scores) <= 1 or np.all(score_values == 0):
             print("APoZ CHECK FAILED: the analyzer is not distinguishing the units.")
@@ -200,24 +208,21 @@ class Analyzer:
         # Keep track of indexes already inserted, so each weight appears once.
         used_indexes = set()
 
-        # Start from the units with the highest APoZ score, meaning the units
-        # that were zero most often and are likely less active on these data.
-        for module_name, unit_index, _score in sorted(apoz_scores, key=lambda item: item[2], reverse=True):
-            # Convert the module name observed by the hook into the matching
-            # weight tensor name from the model state_dict.
-            weight_name = f"{module_name}.weight"
+        # Start from channels with the highest APoZ score. These channels were
+        # zero most often and were therefore less active on the sampled data.
+        for activation_name, channel_index, _score in sorted(
+                apoz_scores, key=lambda item: item[2], reverse=True):
+            target = apoz_targets[activation_name]
 
-            # Some observed modules may not match the flattened weights used by
-            # injector_new/extractor_new, so skip those safely.
-            if weight_name not in self.weight_metadata:
-                continue
-
-            # Convert the selected neuron/channel into its flattened weight
-            # indexes and append them to the sequence.
-            for index in self._indexes_for_output_unit(weight_name, unit_index):
+            # Convert the selected activation channel into the flattened
+            # indexes of the connected convolutional weights.
+            for index in self._indexes_for_channel(
+                    target["weight_name"], channel_index, target["channel_axis"]):
                 if index not in used_indexes:
                     sequence.append(index)
                     used_indexes.add(index)
+
+        print(f"APoZ mapped weights: {len(used_indexes)} / {len(self.weights)}")
 
         # APoZ fallback:
         # If the activation-based layers do not cover enough weights, append the
@@ -236,7 +241,42 @@ class Analyzer:
         # by injector_new.py and extractor_new.py.
         return np.array(sequence, dtype=np.int64)
 
-    def _collect_apoz_scores(self, dataloader, device, max_batches, zero_threshold):
+    def _get_apoz_targets(self):
+        targets = {}
+
+        # DenseNet uses named ReLU modules before or after specific
+        # convolutions. The name identifies both the connected convolution and
+        # whether the activation channel matches its output or input axis.
+        relu_mappings = {
+            "relu0": ("conv0", 0),
+            "relu1": ("conv1", 1),
+            "relu2": ("conv2", 1),
+            "relu": ("conv", 1),
+        }
+
+        for activation_name, module in self.model.named_modules():
+            if not isinstance(module, torch.nn.ReLU):
+                continue
+
+            parent_name, separator, relu_name = activation_name.rpartition(".")
+            if not separator or relu_name not in relu_mappings:
+                continue
+
+            convolution_name, channel_axis = relu_mappings[relu_name]
+            weight_name = f"{parent_name}.{convolution_name}.weight"
+
+            # Only include tensors flattened by injector_new.py and
+            # extractor_new.py, so every generated index uses the same layout.
+            if weight_name in self.weight_metadata:
+                targets[activation_name] = {
+                    "weight_name": weight_name,
+                    "channel_axis": channel_axis,
+                }
+
+        return targets
+
+    def _collect_apoz_scores(
+            self, dataloader, device, max_batches, zero_threshold, apoz_targets):
         scores = {}
         handles = []
 
@@ -266,30 +306,32 @@ class Analyzer:
 
             return hook
 
-        # APoZ hooks:
-        # Conv2d output channels and Linear output neurons are the units ranked
-        # by this method.
+        # Attach hooks only to ReLU modules that have a known DenseNet weight
+        # mapping. Their outputs contain the actual zeros measured by APoZ.
         for name, module in self.model.named_modules():
-            if isinstance(module, (torch.nn.Conv2d, torch.nn.Linear)):
+            if name in apoz_targets:
                 handles.append(module.register_forward_hook(make_hook(name)))
 
         was_training = self.model.training
         self.model.to(device)
         self.model.eval()
 
-        with torch.no_grad():
-            for batch_index, batch in enumerate(dataloader):
-                if batch_index >= max_batches:
-                    break
+        try:
+            with torch.no_grad():
+                for batch_index, batch in enumerate(dataloader):
+                    if batch_index >= max_batches:
+                        break
 
-                x, _ = batch
-                self.model(x.to(device))
+                    x, _ = batch
+                    self.model(x.to(device))
+        finally:
+            # Always remove hooks and restore the previous model mode, even if
+            # a forward pass raises an exception.
+            for handle in handles:
+                handle.remove()
 
-        if was_training:
-            self.model.train()
-
-        for handle in handles:
-            handle.remove()
+            if was_training:
+                self.model.train()
 
         apoz_scores = []
         for name, values in scores.items():
@@ -299,15 +341,36 @@ class Analyzer:
 
         return apoz_scores
 
-    def _indexes_for_output_unit(self, weight_name, unit_index):
+    def _indexes_for_channel(self, weight_name, channel_index, channel_axis):
         metadata = self.weight_metadata[weight_name]
         shape = metadata["shape"]
 
-        if len(shape) < 1 or unit_index >= shape[0]:
+        if channel_axis >= len(shape) or channel_index >= shape[channel_axis]:
             return []
 
-        weights_per_unit = int(np.prod(shape[1:])) if len(shape) > 1 else 1
-        start = metadata["start"] + unit_index * weights_per_unit
-        end = min(start + weights_per_unit, metadata["end"])
+        # Axis 0 is a convolution output channel. Its filter weights are stored
+        # in one contiguous block in the flattened tensor.
+        if channel_axis == 0:
+            weights_per_channel = int(np.prod(shape[1:])) if len(shape) > 1 else 1
+            start = metadata["start"] + channel_index * weights_per_channel
+            end = min(start + weights_per_channel, metadata["end"])
+            return range(start, end)
 
-        return range(start, end)
+        # Axis 1 is a convolution input channel. Its values appear once inside
+        # every output filter, so gather the matching slice from each filter.
+        if channel_axis == 1:
+            values_per_input_channel = int(np.prod(shape[2:])) if len(shape) > 2 else 1
+            values_per_output_channel = int(np.prod(shape[1:]))
+            indexes = []
+
+            for output_index in range(shape[0]):
+                local_start = (
+                    output_index * values_per_output_channel
+                    + channel_index * values_per_input_channel
+                )
+                start = metadata["start"] + local_start
+                indexes.extend(range(start, start + values_per_input_channel))
+
+            return indexes
+
+        return []

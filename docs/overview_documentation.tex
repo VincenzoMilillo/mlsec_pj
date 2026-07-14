@@ -350,9 +350,11 @@ The same seed and selection logic are used during extraction, so the original ex
 
 In the analyzer-driven workflow, \code{Analyzer} returns an explicit ordered sequence. The \code{--method} argument chooses APoZ, least absolute value, clustered least absolute value, layer-wise z-score, Taylor expansion, or a combined score. \code{injector\_new.py} and \code{extractor\_new.py} receive the same sequence, allowing strategies to be changed without editing those components.
 
-\subsection{Current APoZ Diagnostic}
+\subsection{APoZ Diagnostic and Post-ReLU Mapping}
 
-The diagnostic run observed 10,250 units but only 14 unique APoZ scores, with 98.34\% of units receiving a zero score. This indicates that counting near-zero values directly on raw \code{Conv2d} and \code{Linear} outputs produces a weak ranking. The proposed follow-up is to measure true post-ReLU activations and map those activation channels to the corresponding DenseNet weights before repeating the accuracy and payload-recovery comparison.
+The earlier diagnostic run observed 10,250 units but only 14 unique APoZ scores, with 98.34\% of units receiving a zero score. This showed that counting near-zero values directly on raw \code{Conv2d} and \code{Linear} outputs produced a weak ranking.
+
+The current implementation instead attaches hooks to DenseNet \code{ReLU} modules and measures the percentage of actual zero activations for each channel. The initial \code{relu0} channel is mapped to the corresponding output channel of \code{conv0}. Internal \code{relu1}, \code{relu2}, and transition \code{relu} channels are mapped to the matching input channel of the convolution that consumes that activation. Channels are ordered from highest to lowest APoZ before their connected flattened weight indexes are passed to the injector. Any weights not covered by these mappings are appended using the least-absolute-value order. The revised diagnostic also reports the number of mapped ReLU modules and the number of weights covered directly by APoZ. A new controlled run is required to compare this corrected ranking with the earlier implementation and the baseline.
 
 \subsection{Capacity Check}
 
