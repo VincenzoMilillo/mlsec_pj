@@ -29,7 +29,7 @@ The APoZ method:
 5. Converts the selected units into flattened weight indexes.
 6. Appends the least-absolute-value ordering as a fallback so the returned sequence is complete.
 
-`maleficnet_new.py` was configured to use APoZ by selecting:
+At the time of this first experiment, `maleficnet_new.py` was configured by editing the active sequence in the source:
 
 ```python
 data.prepare_data()
@@ -41,17 +41,17 @@ sequence = analyzer.APoZ_single(
 )
 ```
 
-The least-absolute-value baseline remains available by switching the active sequence line:
+The current version no longer requires source-code changes. APoZ and the least-absolute-value baseline can be selected with `--method apoz` and `--method least_abs` respectively.
 
-```python
-# sequence = analyzer.analyze_least_absolute_value()
+```bash
+./.venv/bin/python maleficnet_new.py --epochs 1 --model densenet --payload dummy.bin --method least_abs --num_workers 2
 ```
 
 ## Test Command
 The run was executed with:
 
 ```bash
-./.venv/bin/python maleficnet_new.py --epochs 1 --model densenet --payload dummy.bin --num_workers 2
+./.venv/bin/python maleficnet_new.py --epochs 1 --model densenet --payload dummy.bin --method apoz --num_workers 2
 ```
 
 The dummy payload was:
@@ -137,7 +137,7 @@ However, payload recovery was not exact. The output changed from `test` to `uest
 
 Possible next checks:
 
-- Compare the same `maleficnet_new.py` flow using `analyze_least_absolute_value()`.
+- Compare the same `maleficnet_new.py` flow using `--method least_abs`.
 - Try a slightly higher `gamma`, such as `0.0012` or `0.0015`.
 - Increase the number of APoZ batches used to estimate activation scores.
 - Compute the APoZ sequence after loading or training the clean model, closer to the actual injection point.

@@ -35,6 +35,15 @@ logging.basicConfig(filename='maleficnet.log', level=logging.DEBUG)
 formatter = logging.Formatter(
     '%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
+ANALYSIS_METHODS = (
+    'apoz',
+    'least_abs',
+    'least_abs_cluster',
+    'zscore',
+    'taylor',
+    'combined',
+)
+
 if torch.cuda.is_available():
     device = 'cuda'
     accelerator = 'gpu'
@@ -75,8 +84,37 @@ def initialize_model(model_name, dim, num_classes, only_pretrained):
 
     return model
 
+
+# Build the weight-index sequence with the selected analysis strategy.
+def build_analysis_sequence(analyzer_instance, method, dataloader, device, chunk_factor):
+    log.info("Building the injection sequence with method: %s", method)
+
+    if method == 'apoz':
+        return analyzer_instance.APoZ(
+            dataloader=dataloader,
+            device=device,
+            max_batches=50,
+        )
+    if method == 'least_abs':
+        return analyzer_instance.analyze_least_absolute_value()
+    if method == 'least_abs_cluster':
+        cluster_size = Injector.CHUNK_SIZE * chunk_factor
+        return analyzer_instance.analyze_least_absolute_value_cluster(cluster_size)
+    if method == 'zscore':
+        return analyzer_instance.analyze_layerwise_zscore()
+    if method == 'taylor':
+        return analyzer_instance.analyze_taylor_expansion(
+            dataloader=dataloader,
+            criterion=nn.NLLLoss(),
+            device=device,
+        )
+    if method == 'combined':
+        return analyzer_instance.analyze_combined_score()
+
+    raise ValueError(f"Unsupported analysis method: {method}")
+
 #python maleficnet.py --epoch 10 --model densenet --payload payload.bin --gamma 0.0009 --dataset cifar10 --num_classes 10 --dim 32
-def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_workers, payload, only_pretrained, fine_tuning, chunk_factor):
+def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_workers, payload, only_pretrained, fine_tuning, chunk_factor, method):
 
     # checkpoint path
     checkpoint_path = Path(os.getcwd()) / 'checkpoints'
@@ -91,18 +129,21 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
     logger = CSVLogger('train.csv', 'val.csv', ['epoch', 'loss', 'accuracy'], [
         'epoch', 'loss', 'accuracy'])
 
-    # Init our data pipeline
+    # Prepare CIFAR-10 before training and data-dependent analysis.
     if dataset == 'cifar10':
         data = CIFAR10(base_path=Path(os.getcwd()),
                        batch_size=batch_size,
                        num_workers=num_workers)
 
+    # Download the dataset if needed and initialize the train/validation splits.
     data.prepare_data()
     data.setup(stage='fit')
 
-
+    # Build the clean model architecture that will later receive the payload.
     model = initialize_model(model_name, dim, num_classes, only_pretrained)
 
+    # The analyzer must inspect the final clean model state. If no clean
+    # checkpoint exists, train the model first and save it for future runs.
     if not pre_model_name.exists():
         model.apply(weights_init_normal)
         if not only_pretrained:
@@ -116,20 +157,22 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
             torch.save(model.state_dict(), pre_model_name)
             del trainer # Cleanup
     else:
+        # Reuse the clean trained state so the analyzer does not inspect random weights.
         log.info("Loading pre-trained clean model")
         model.load_state_dict(torch.load(pre_model_name))
 
-
-
-    #model.apply(analyzer.analyze_least_absolute_value)
+    # Create the analyzer only after the clean model has been trained or loaded.
+    # model.apply(analyzer.analyze_least_absolute_value)
     analyzer = Analyzer(model = model)
 
-    #sequence_abs_value = analyzer.analyze_least_absolute_value()
-    sequence = analyzer.APoZ(
+    # Build one sequence with the method selected from the command line.
+    sequence = build_analysis_sequence(
+        analyzer_instance=analyzer,
+        method=method,
         dataloader=data.train_dataloader(),
         device=device,
-        max_batches=50,
-    )  
+        chunk_factor=chunk_factor,
+    )
 
     # Init our malware injector
     injector = Injector(seed=42,
@@ -230,6 +273,9 @@ if __name__ == '__main__':
                         help='The payload to inject in the model.')
     parser.add_argument('--gamma', type=float, default=0.0009,
                         help='The gamma used to inject.')
+    parser.add_argument('--method', type=str, choices=ANALYSIS_METHODS,
+                        default='apoz',
+                        help='Analysis strategy used to order model weights.')
 
     args = parser.parse_args()
     torch.manual_seed(args.random_seed)
@@ -245,4 +291,5 @@ if __name__ == '__main__':
          payload=args.payload,
          only_pretrained=args.only_pretrained,
          fine_tuning=args.fine_tuning,
-         chunk_factor=6)
+         chunk_factor=6,
+         method=args.method)

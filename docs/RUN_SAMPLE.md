@@ -1,8 +1,8 @@
-RUN SAMPLE: MaleficNet demo (5-epoch smoke test)
+RUN SAMPLE: Analyzer-driven MaleficNet demo (5-epoch smoke test)
 
 Overview
 --------
-This file documents the exact sample run I executed, how to verify that the payload was extracted successfully, and which files I changed during the compatibility/debugging process.
+This file documents a sample analyzer-driven run, how to select the analysis method, and how to verify that the payload was extracted successfully.
 
 Environment
 -----------
@@ -23,9 +23,26 @@ Commands I ran (sample 5-epoch run)
    mkdir -p payload
    echo "test" > payload/dummy.bin
 
-2. Run a 5-epoch demo (training, injection, retrain, extraction):
+2. Run a 5-epoch APoZ demo (training, analysis, injection, retraining, and extraction):
 
-   ./.venv/bin/python maleficnet.py --epochs 5 --model densenet --payload dummy.bin --num_workers 2
+   ./.venv/bin/python maleficnet_new.py --epochs 5 --model densenet --payload dummy.bin --method apoz --num_workers 2
+
+Analysis method selection
+-------------------------
+Use `--method` to select the strategy without editing the Python source. The available values are:
+
+   apoz
+   least_abs
+   least_abs_cluster
+   zscore
+   taylor
+   combined
+
+For example, run the same experiment with the least-absolute-value baseline using:
+
+   ./.venv/bin/python maleficnet_new.py --epochs 5 --model densenet --payload dummy.bin --method least_abs --num_workers 2
+
+If `--method` is omitted, the default is `apoz`.
 
 What you should observe
 -----------------------
@@ -49,7 +66,8 @@ Verifying extraction success
 
 Files I changed in the repository
 --------------------------------
-- maleficnet.py — added MPS detection (device='mps') and updated Trainer arguments to use accelerator/devices; switched to using a Lightning logger that is compatible with the installed Lightning version.
+- maleficnet_new.py — supports MPS, analyzer-driven weight selection, and the `--method` command-line option.
+- analyzer.py — implements the available parameter-selection strategies.
 - extractor_callback.py — fixed Callback import path for installed Lightning.
 - logger/csv_logger.py — adjusted logger implementation while testing (the running Trainer used TensorBoardLogger for compatibility).
 - models/densenet.py — updated torchmetrics accuracy() calls to include task and num_classes.
@@ -58,9 +76,4 @@ Files I changed in the repository
 
 Cleanup performed
 -----------------
-I removed the temporary verification artifacts after the successful run:
-- payload/dummy.bin
-- payload/extract/dummy.bin.no_execute
-- train.csv, val.csv
-- maleficnet.log
-- logs/, lightning_logs/, checkpoints/
+Generated extraction results, CSV logs, checkpoints, and Lightning logs are ignored by Git and can be removed after a run. The benign input payloads in `payload/` are tracked so collaborators can reproduce the experiments.

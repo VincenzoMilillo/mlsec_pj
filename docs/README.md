@@ -27,9 +27,15 @@ Torchvision should take care by itself about CIFAR10.
 
 ### Usage
 
-To test using **DenseNet** and **payload.bin** payload, run this command. It will use a pre-trained DenseNet model from `torchvision.models` and will fine-tune it using CIFAR10. 
+To test the analyzer-driven workflow using **DenseNet**, CIFAR-10, and **payload.bin**, run:
 
-    python maleficnet.py --epoch 10 --model densenet --payload payload.bin --gamma 0.0009 --dataset cifar10 --num_classes 10 --dim 32
+    ./.venv/bin/python maleficnet_new.py --epochs 10 --model densenet --payload payload.bin --gamma 0.0009 --dataset cifar10 --num_classes 10 --dim 32 --method apoz
+
+The `--method` option selects how model weights are ordered for injection and extraction. Available values are `apoz`, `least_abs`, `least_abs_cluster`, `zscore`, `taylor`, and `combined`. APoZ is used by default when the option is omitted.
+
+For example, use the least-absolute-value baseline with:
+
+    ./.venv/bin/python maleficnet_new.py --epochs 10 --model densenet --payload payload.bin --gamma 0.0009 --method least_abs
 
 ### References
 

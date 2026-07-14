@@ -47,7 +47,7 @@
 \title{\textbf{MaleficNet Project Overview Documentation}\\
 \large Structure, Techniques, Libraries, and Execution Workflow}
 \author{Repository: \code{mlsec\_proj}}
-\date{Generated on June 6, 2026}
+\date{Updated on July 14, 2026}
 
 \begin{document}
 
@@ -79,9 +79,13 @@ docs/README.md & Main project description, warnings, dependency notes, and basic
 docs/RUN\_SAMPLE.md & Notes from a sample run, including a dummy payload workflow and verification instructions. \\
 docs/SETUP\_MAC\_PROM4\_REPORT.md & Environment and compatibility report for running the project on macOS Apple Silicon with PyTorch MPS. \\
 requirements.txt & Pinned Python dependencies used by the current setup. \\
-maleficnet.py & Main command-line entry point. It wires together the dataset, model, injector, extractor, trainer, device selection, checkpoints, and run modes. \\
+maleficnet.py & Original command-line entry point using deterministic pseudo-random weight selection. \\
+maleficnet\_new.py & Analyzer-driven entry point with command-line method selection. \\
+analyzer.py & Implements APoZ, least-absolute-value, clustered least-absolute-value, layer-wise z-score, Taylor, and combined-score strategies. \\
 injector.py & Implements payload preparation and spread-spectrum injection into model weights. \\
 extractor.py & Implements signal recovery, LDPC decoding, payload reconstruction, and hash verification. \\
+injector\_new.py & Injector variant that receives an external analyzer sequence. \\
+extractor\_new.py & Extractor variant that reads the same external analyzer sequence. \\
 extractor\_callback.py & Defines a PyTorch Lightning callback that periodically attempts extraction during fine-tuning. \\
 models/densenet.py & DenseNet-121 based PyTorch Lightning module for classification. \\
 dataset/cifar10.py & PyTorch Lightning data module for CIFAR-10 download, split, and dataloaders. \\
@@ -94,8 +98,8 @@ The repository also produces runtime artifacts that are not the conceptual sourc
 
 \begin{itemize}[leftmargin=1.4em]
   \item \code{data/}: CIFAR-10 dataset files downloaded by \code{torchvision}.
-  \item \code{checkpoints/}: pre-injection and post-injection model weights saved by \code{maleficnet.py}.
-  \item \code{payload/}: location where input payloads are expected.
+  \item \code{checkpoints/}: pre-injection and post-injection model weights saved by the entry-point scripts.
+  \item \code{payload/}: tracked location for benign input payloads used to reproduce experiments.
   \item \code{payload/extract/}: location where extracted payloads are written.
   \item \code{logs/}, \code{lightning\_logs/}, and \code{csvlogger/}: training logs and experiment output directories.
   \item \code{maleficnet.log}: application log produced by the main script.
@@ -103,9 +107,9 @@ The repository also produces runtime artifacts that are not the conceptual sourc
 
 \section{Execution Entry Point}
 
-\subsection{\code{maleficnet.py}}
+\subsection{\code{maleficnet\_new.py}}
 
-\code{maleficnet.py} is the orchestrator. It performs device detection, parses command-line arguments, initializes the data module and model, prepares the injector and extractor, trains or loads a model, injects the payload, retrains after injection, and finally checks whether extraction succeeds.
+\code{maleficnet\_new.py} is the analyzer-driven orchestrator. It trains or loads the clean model, builds a weight-index sequence with the selected analysis method, injects the payload, retrains the model, and extracts the payload using the same sequence. The original \code{maleficnet.py} remains available as the pseudo-random-selection baseline.
 
 \subsubsection{Device Selection}
 
@@ -129,16 +133,17 @@ The script accepts the following important arguments:
 \endhead
 --dataset & cifar10 & Dataset name. The current implementation supports CIFAR-10. \\
 --dim & 32 & Input image dimension, with 32 matching CIFAR-10. \\
---model, -m & vgg11 & Model name argument. The implemented model initializer recognizes \code{densenet}; practical runs should pass \code{--model densenet}. \\
+--model, -m & densenet & Model name. The current implementation supports DenseNet. \\
 --num\_classes & 10 & Number of classification classes. \\
 --only\_pretrained & false & If set, keeps the pretrained DenseNet classifier instead of replacing it. For CIFAR-10, replacement is normally needed. \\
 --fine\_tuning & false & Switches to a fine-tuning workflow that loads a post-injection checkpoint and uses the extraction callback. \\
---epochs & 60 & Number of epochs for training or fine-tuning. \\
+--epochs & 10 & Number of epochs for training or fine-tuning. \\
 --batch\_size & 64 & DataLoader batch size. \\
 --random\_seed & 8 & Seed passed to \code{torch.manual\_seed}. \\
---num\_workers & 20 & Number of worker processes for data loading. \\
+--num\_workers & 2 & Number of worker processes for data loading. \\
 --payload & payload.exe & Payload filename expected under \code{payload/}. \\
 --gamma & 0.0009 & Injection strength used to perturb model weights. \\
+--method & apoz & Analyzer strategy: \code{apoz}, \code{least\_abs}, \code{least\_abs\_cluster}, \code{zscore}, \code{taylor}, or \code{combined}. \\
 \end{longtable}
 
 \subsubsection{Model Checkpoints}
@@ -161,11 +166,12 @@ When \code{--fine\_tuning} is not set, the workflow is:
   \item Initialize the CIFAR-10 data module.
   \item Initialize the DenseNet model.
   \item Initialize model weights for linear layers using \code{weights\_init\_normal}.
-  \item Initialize \code{Injector} with the payload path, output path, seed, device, and chunk factor.
-  \item Initialize \code{Extractor} with the same seed, output path, payload length, hash length, and chunk factor.
-  \item Compute the encoded message length that will be embedded.
   \item Train and test the clean model, unless a clean checkpoint already exists.
-  \item Test the clean model.
+  \item Load the clean checkpoint when it already exists.
+  \item Initialize \code{Analyzer} after the final clean model state is available.
+  \item Build the ordered weight-index sequence with the strategy selected by \code{--method}.
+  \item Initialize \code{Injector} and \code{Extractor} with the payload information and shared settings.
+  \item Compute the encoded message length that will be embedded.
   \item Inject the encoded payload into the model state dictionary.
   \item Load the injected state dictionary into the model.
   \item Retrain the model for a few epochs to restore classification performance.
@@ -328,7 +334,7 @@ layers = [n for n in model_st_dict.keys() if "weight" in str(n)][:-1]
 
 It records each layer's flattened length, concatenates the weights into one NumPy array, modifies selected positions, and then reconstructs each layer tensor with its original shape.
 
-Selected positions are generated with a deterministic pseudo-random index sequence:
+In the original \code{maleficnet.py} workflow, selected positions are generated with a deterministic pseudo-random index sequence:
 
 \begin{lstlisting}[language=Python]
 np.random.seed(self.seed)
@@ -340,7 +346,13 @@ filter_indexes = np.random.randint(
 ).tolist()
 \end{lstlisting}
 
-The same seed and selection logic are used during extraction, so the extractor knows which weights to read without storing the index list separately.
+The same seed and selection logic are used during extraction, so the original extractor knows which weights to read without storing the index list separately.
+
+In the analyzer-driven workflow, \code{Analyzer} returns an explicit ordered sequence. The \code{--method} argument chooses APoZ, least absolute value, clustered least absolute value, layer-wise z-score, Taylor expansion, or a combined score. \code{injector\_new.py} and \code{extractor\_new.py} receive the same sequence, allowing strategies to be changed without editing those components.
+
+\subsection{Current APoZ Diagnostic}
+
+The diagnostic run observed 10,250 units but only 14 unique APoZ scores, with 98.34\% of units receiving a zero score. This indicates that counting near-zero values directly on raw \code{Conv2d} and \code{Linear} outputs produces a weak ranking. The proposed follow-up is to measure true post-ReLU activations and map those activation channels to the corresponding DenseNet weights before repeating the accuracy and payload-recovery comparison.
 
 \subsection{Capacity Check}
 
@@ -425,11 +437,11 @@ This callback helps evaluate payload persistence during model fine-tuning. If ex
 
 \subsection{Application Logging}
 
-\code{maleficnet.py} configures Python logging to write to \code{maleficnet.log}. The injector and extractor log timing, signal-to-noise estimates, hash comparison values, and success/failure status.
+The entry-point scripts configure Python logging to write to \code{maleficnet.log}. The injector and extractor log timing, signal-to-noise estimates, hash comparison values, and success/failure status.
 
 \subsection{Training Logging}
 
-The main script attempts to use PyTorch Lightning's \code{TensorBoardLogger}. If that import fails, it sets the trainer logger to \code{None}. The repository also contains \code{logger/csv\_logger.py}, a minimal logger that can write training and validation metrics to CSV files. This logger implements methods and properties expected by Lightning, including \code{log\_metrics}, \code{log\_hyperparams}, \code{name}, \code{version}, \code{experiment}, \code{finalize}, \code{log\_graph}, \code{log\_dir}, and \code{save}.
+The analyzer-driven script uses \code{logger/csv\_logger.py}, a minimal logger that writes training and validation metrics to CSV files and implements the compatibility hooks expected by the installed Lightning version.
 
 \subsection{Generated Files}
 
@@ -501,14 +513,15 @@ The normal run can be summarized as:
 
 \begin{enumerate}[leftmargin=1.6em]
   \item User places a payload file under \code{payload/}.
-  \item \code{maleficnet.py} initializes the data module and DenseNet model.
+  \item \code{maleficnet\_new.py} initializes the data module and DenseNet model.
   \item The model is trained or loaded from a clean checkpoint.
+  \item \code{Analyzer} builds the weight-index sequence selected by \code{--method}.
   \item \code{Injector} reads the payload and converts it to bits.
   \item \code{Injector} appends a SHA-256 hash represented as bits.
   \item \code{Injector} LDPC-encodes the message and prepends a preamble.
-  \item \code{Injector} embeds the resulting signal into flattened model weights.
+  \item \code{Injector} embeds the resulting signal into the analyzer-selected model weights.
   \item The injected model is retrained and saved.
-  \item \code{Extractor} reads the same weight positions using the same seed.
+  \item \code{Extractor} reads the same weight positions using the shared analyzer sequence.
   \item \code{Extractor} estimates the embedded symbols via correlation.
   \item \code{Extractor} uses the preamble to estimate gain and SNR.
   \item \code{Extractor} decodes LDPC chunks and rebuilds the payload.
@@ -522,12 +535,15 @@ A safe smoke test should use a benign dummy payload:
 \begin{lstlisting}[language=bash]
 mkdir -p payload
 printf "test" > payload/dummy.bin
-./.venv/bin/python maleficnet.py \
+./.venv/bin/python maleficnet_new.py \
   --epochs 1 \
   --model densenet \
   --payload dummy.bin \
+  --method apoz \
   --num_workers 2
 \end{lstlisting}
+
+Change \code{--method apoz} to \code{--method least\_abs} to run the least-absolute-value baseline without editing the Python source. The other accepted values are \code{least\_abs\_cluster}, \code{zscore}, \code{taylor}, and \code{combined}.
 
 After the run, verify extraction by comparing checksums:
 
@@ -541,7 +557,7 @@ Matching hashes indicate that the extracted payload bytes match the original dum
 
 \subsection{Supported Model Argument}
 
-The argument parser defaults \code{--model} to \code{vgg11}, but \code{initialize\_model} only creates a model when \code{model\_name == "densenet"}. Therefore, practical commands should explicitly pass \code{--model densenet}.
+The current model initializer supports DenseNet, so reproducible commands should explicitly pass \code{--model densenet}.
 
 \subsection{Payload Size and Model Capacity}
 
@@ -567,14 +583,14 @@ Natural extensions include:
   \item Adding more model architectures in \code{initialize\_model}.
   \item Adding more datasets by implementing additional Lightning data modules.
   \item Experimenting with payload size, \code{gamma}, \code{chunk\_factor}, and LDPC parameters.
-  \item Implementing a model-weight analyzer to choose lower-risk weights rather than selecting positions uniformly at random.
+  \item Comparing APoZ, least absolute value, z-score, Taylor, and combined strategies under identical seeds and training settings.
   \item Adding structured experiment outputs for accuracy, extraction success, SNR, payload size, and timing.
   \item Adding automated tests for bit conversion, hash reconstruction, chunk padding, and small synthetic injection/extraction cases.
 \end{itemize}
 
 \section{Conclusion}
 
-The project is a compact end-to-end demonstration of hiding a binary payload in neural-network parameters using spread-spectrum techniques and LDPC channel coding. The source tree separates the workflow cleanly: \code{maleficnet.py} orchestrates the run, \code{models/} and \code{dataset/} define the learning task, \code{injector.py} implements embedding, \code{extractor.py} implements recovery, and \code{utils/} provides low-level bit operations. The main technical tradeoff is between maintaining model performance and keeping the embedded signal recoverable after training noise.
+The project is a compact end-to-end demonstration of hiding a binary payload in neural-network parameters using spread-spectrum techniques and LDPC channel coding. The analyzer-driven workflow is orchestrated by \code{maleficnet\_new.py}; \code{Analyzer} ranks candidate parameters, the new injector and extractor share that sequence, and \code{--method} makes strategies selectable without source edits. The main technical tradeoff is between maintaining model performance and keeping the embedded signal recoverable after training noise.
 
 Because the repository is about malware-hiding research, it should be handled with care. For development and demonstration, benign dummy payloads provide the same technical coverage without introducing operational risk.
 

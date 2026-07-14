@@ -27,14 +27,15 @@ Second, the APoZ function was renamed from `APoZ_single` to `APoZ`, because the 
 - `Linear` layers by ranking output neurons;
 - `Conv2d` layers by ranking output channels / feature maps.
 
-Third, APoZ was configured to use 50 batches:
+Third, APoZ was configured to use 50 batches inside the command-line method dispatcher:
 
 ```python
-sequence = analyzer.APoZ(
-    dataloader=data.train_dataloader(),
-    device=device,
-    max_batches=50,
-)
+if method == 'apoz':
+    return analyzer_instance.APoZ(
+        dataloader=dataloader,
+        device=device,
+        max_batches=50,
+    )
 ```
 
 ## Critical Issues Resolved
@@ -72,7 +73,7 @@ In practical terms:
 The run was executed with:
 
 ```bash
-./.venv/bin/python maleficnet_new.py --epochs 1 --model densenet --payload long_dummy.bin --num_workers 2
+./.venv/bin/python maleficnet_new.py --epochs 1 --model densenet --payload long_dummy.bin --method apoz --num_workers 2
 ```
 
 ## Runtime Results

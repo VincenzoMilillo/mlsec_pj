@@ -68,15 +68,13 @@ class Analyzer:
         return np.array(final_indexes)
 
     def _get_target_layers(self):
-        """Helper to match the Injector's exact layer targeting logic"""
+        # Helper to match the Injector's exact layer targeting logic
         model_st_dict = self.model.state_dict()
         return [n for n in model_st_dict.keys() if "weight" in str(n)][:-1]
 
     def analyze_layerwise_zscore(self):
-        """
-        STATIC: Evaluates the distribution of weights within their specific layer.
-        Weights closest to their layer's mean (Z-score near 0) are considered safest.
-        """
+        # STATIC: Evaluates the distribution of weights within their specific layer.
+        # Weights closest to their layer's mean (Z-score near 0) are considered safest.
         z_scores = []
         model_st_dict = self.model.state_dict()
         target_layers = self._get_target_layers()
@@ -91,11 +89,12 @@ class Analyzer:
         return np.argsort(np.array(z_scores))
 
     def analyze_taylor_expansion(self, dataloader, criterion, device, num_batches=1):
-        """
-        DYNAMIC: First-Order Taylor Expansion (SNIP heuristic).
-        Multiplies weight magnitude by its gradient. Requires passing a batch of data.
-        Least impactful weights have |weight * gradient| near 0.
-        """
+
+        # DYNAMIC: First-Order Taylor Expansion (SNIP heuristic).
+        # Multiplies weight magnitude by its gradient. Requires passing a batch of data.
+        # Least impactful weights have |weight * gradient| near 0.
+        was_training = self.model.training
+        self.model.to(device)
         self.model.eval()
         self.model.zero_grad()
         
@@ -125,13 +124,15 @@ class Analyzer:
                 taylor_scores.extend(np.zeros_like(param.detach().cpu().numpy().flatten()))
                 
         self.model.zero_grad() # Clean up gradients
+        if was_training:
+            self.model.train()
         return np.argsort(np.array(taylor_scores))
 
     def analyze_combined_score(self, w_mag=0.6, w_zscore=0.4):
-        """
-        STATIC: Combines multiple heuristics into a single score.
-        Fixes the bug where indices were normalized instead of raw values.
-        """
+
+        # STATIC: Combines multiple heuristics into a single score.
+        #Fixes the bug where indices were normalized instead of raw values.
+
         # 1. Get RAW magnitude scores and normalize to [0, 1]
         raw_mag = np.abs(self.weights)
         mag_norm = (raw_mag - raw_mag.min()) / (raw_mag.max() - raw_mag.min() + 1e-8)
@@ -169,6 +170,29 @@ class Analyzer:
             max_batches=max_batches,
             zero_threshold=zero_threshold,
         )
+
+        # APoZ diagnostic check: verify that the observed units receive a
+        # meaningful range of scores instead of all being classified equally.
+        if not apoz_scores:
+            raise RuntimeError("APoZ CHECK FAILED: no activation scores were collected.")
+
+        score_values = np.array([score for _, _, score in apoz_scores])
+        unique_scores = np.unique(score_values)
+        zero_score_percentage = float(np.mean(score_values == 0) * 100)
+
+        print(f"APoZ units: {len(score_values)}")
+        print(f"APoZ min: {score_values.min():.8f}")
+        print(f"APoZ mean: {score_values.mean():.8f}")
+        print(f"APoZ max: {score_values.max():.8f}")
+        print(f"APoZ unique scores: {len(unique_scores)}")
+        print(f"APoZ zero-score percentage: {zero_score_percentage:.2f}%")
+
+        if len(unique_scores) <= 1 or np.all(score_values == 0):
+            print("APoZ CHECK FAILED: the analyzer is not distinguishing the units.")
+        elif zero_score_percentage >= 95:
+            print("APoZ CHECK WARNING: at least 95% of the units have a zero score.")
+        else:
+            print("APoZ CHECK PASSED: the analyzer produces different activity scores.")
 
         # This will become the final ordered list of flattened weight indexes.
         sequence = []

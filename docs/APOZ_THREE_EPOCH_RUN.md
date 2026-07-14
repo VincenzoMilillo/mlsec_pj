@@ -6,14 +6,10 @@ This report documents the APoZ run with 3 post-injection training epochs using t
 The goal was to test whether the APoZ-selected injection sequence remains recoverable after more retraining. The previous successful APoZ run used 1 epoch and extracted the long payload correctly. This run increased training to 3 epochs to stress the embedded signal.
 
 ## Current Setup
-The active analyzer strategy was APoZ:
+The active analyzer strategy was APoZ. In the current CLI it is selected with:
 
-```python
-sequence = analyzer.APoZ(
-    dataloader=data.train_dataloader(),
-    device=device,
-    max_batches=50,
-)
+```bash
+--method apoz
 ```
 
 The analyzer was already aligned with `injector_new.py` and `extractor_new.py` by flattening the same weight tensors:
@@ -28,7 +24,7 @@ This means the previous out-of-bounds indexing issue was not the problem in this
 The run was executed with:
 
 ```bash
-./.venv/bin/python maleficnet_new.py --epochs 3 --model densenet --payload long_dummy.bin --num_workers 2
+./.venv/bin/python maleficnet_new.py --epochs 3 --model densenet --payload long_dummy.bin --method apoz --num_workers 2
 ```
 
 ## Runtime Results
@@ -158,7 +154,7 @@ Finally, APoZ could be combined with a stability criterion. Instead of choosing 
 After the failed 3-epoch run with the default `gamma`, the same experiment was repeated with a slightly stronger injection signal:
 
 ```bash
-./.venv/bin/python maleficnet_new.py --epochs 3 --model densenet --payload long_dummy.bin --num_workers 2 --gamma 0.0012
+./.venv/bin/python maleficnet_new.py --epochs 3 --model densenet --payload long_dummy.bin --method apoz --num_workers 2 --gamma 0.0012
 ```
 
 The run again completed using Apple MPS:

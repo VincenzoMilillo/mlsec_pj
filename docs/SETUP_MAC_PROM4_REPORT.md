@@ -85,10 +85,16 @@ PY
 The tensor test moved data to `mps:0` and completed successfully, confirming that PyTorch could use the Apple GPU.
 
 ## Smoke Test
-A small safe payload was created at `payload/dummy.bin`, then the project was run with:
+A small safe payload was created at `payload/dummy.bin`. The original setup smoke test was run with:
 
 ```bash
 ./.venv/bin/python maleficnet.py --epochs 1 --model densenet --payload dummy.bin --num_workers 2
+```
+
+The current analyzer-driven equivalent selects APoZ explicitly:
+
+```bash
+./.venv/bin/python maleficnet_new.py --epochs 1 --model densenet --payload dummy.bin --method apoz --num_workers 2
 ```
 
 Observed results:
@@ -114,12 +120,12 @@ Install the pinned dependencies:
 ./.venv/bin/python -m pip install torch==2.11.0 torchvision==0.26.0 pytorch-lightning==2.6.1 pyldpc==0.7.9 bitstring==4.4.0 torchmetrics==1.9.0 numpy==2.4.4 scipy==1.17.1
 ```
 
-Run the smoke test:
+Run the current analyzer-driven smoke test:
 
 ```bash
 mkdir -p payload
 echo "test" > payload/dummy.bin
-./.venv/bin/python maleficnet.py --epochs 1 --model densenet --payload dummy.bin --num_workers 2
+./.venv/bin/python maleficnet_new.py --epochs 1 --model densenet --payload dummy.bin --method apoz --num_workers 2
 ```
 
 ## Safety Notes

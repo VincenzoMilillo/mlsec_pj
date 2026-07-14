@@ -40,14 +40,16 @@ else:
     model.load_state_dict(torch.load(pre_model_name))
 ```
 
-Only after that, the analyzer builds the sequence:
+Only after that, the selected command-line method builds the sequence:
 
 ```python
 analyzer = Analyzer(model=model)
-sequence = analyzer.APoZ(
+sequence = build_analysis_sequence(
+    analyzer_instance=analyzer,
+    method=method,
     dataloader=data.train_dataloader(),
     device=device,
-    max_batches=50,
+    chunk_factor=chunk_factor,
 )
 ```
 
@@ -92,7 +94,7 @@ This is needed because `APoZ()` still uses it as a fallback to complete the sequ
 Command:
 
 ```bash
-./.venv/bin/python maleficnet_new.py --epochs 1 --model densenet --payload dummy.bin --num_workers 2
+./.venv/bin/python maleficnet_new.py --epochs 1 --model densenet --payload dummy.bin --method apoz --num_workers 2
 ```
 
 Result:
@@ -122,7 +124,7 @@ This run confirms that the corrected APoZ workflow works with the short dummy pa
 Command:
 
 ```bash
-./.venv/bin/python maleficnet_new.py --epochs 5 --model densenet --payload dummy.bin --num_workers 2
+./.venv/bin/python maleficnet_new.py --epochs 5 --model densenet --payload dummy.bin --method apoz --num_workers 2
 ```
 
 Result:
@@ -152,7 +154,7 @@ This shows that the short payload remains recoverable even after a longer retrai
 Command:
 
 ```bash
-./.venv/bin/python maleficnet_new.py --epochs 5 --model densenet --payload long_dummy.bin --num_workers 2
+./.venv/bin/python maleficnet_new.py --epochs 5 --model densenet --payload long_dummy.bin --method apoz --num_workers 2
 ```
 
 Result:
