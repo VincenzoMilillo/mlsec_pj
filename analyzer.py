@@ -88,11 +88,10 @@ class Analyzer:
         
         return np.argsort(np.array(z_scores))
 
-    def analyze_taylor_expansion(self, dataloader, criterion, device, num_batches=1):
+    def analyze_gradients(self, dataloader, criterion, device, num_batches=1):
 
-        # DYNAMIC: First-Order Taylor Expansion (SNIP heuristic).
-        # Multiplies weight magnitude by its gradient. Requires passing a batch of data.
-        # Least impactful weights have |weight * gradient| near 0.
+        # Multiplies weight magnitude by its gradient.
+        # Least impactful weights have |weight * gradient| near 0
         was_training = self.model.training
         self.model.to(device)
         self.model.eval()
@@ -107,7 +106,7 @@ class Analyzer:
             loss = criterion(outputs, targets)
             loss.backward()
             
-        taylor_scores = []
+        gradients_scores = []
         target_layers = self._get_target_layers()
         model_params = dict(self.model.named_parameters())
         
@@ -118,15 +117,15 @@ class Analyzer:
                 g = param.grad.detach().cpu().numpy()
                 # Score is magnitude of weight times its gradient
                 score = np.abs(w * g)
-                taylor_scores.extend(score.flatten())
+                gradients_scores.extend(score.flatten())
             else:
                 # Fallback if no gradient is calculated
-                taylor_scores.extend(np.zeros_like(param.detach().cpu().numpy().flatten()))
+                gradients_scores.extend(np.zeros_like(param.detach().cpu().numpy().flatten()))
                 
         self.model.zero_grad() # Clean up gradients
         if was_training:
             self.model.train()
-        return np.argsort(np.array(taylor_scores))
+        return np.argsort(np.array(gradients_scores))
 
     def analyze_combined_score(self, w_mag=0.6, w_zscore=0.4):
 
