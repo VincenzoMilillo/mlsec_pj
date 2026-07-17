@@ -1,8 +1,6 @@
-import torch
 import numpy as np
 import scipy.stats as stats
 import matplotlib.pyplot as plt
-import os
 
 class Detector:
     def __init__(self, target_model, clean_model=None):
@@ -144,30 +142,7 @@ class Detector:
 
         return is_detected, chi2_stat
 
-    # REFERENCE TESTS (REQUIRE CLEAN MODEL FOR COMPARISON)
-
-    def detect_global_anomalies(self):
-        print("Running Global Anomaly Detection")
-        target_kurt = stats.kurtosis(self.target_weights)
-        target_ent = self._calculate_entropy(self.target_weights)
-        
-        is_detected = False
-        if self.clean_weights is not None:
-            clean_kurt = stats.kurtosis(self.clean_weights)
-            clean_ent = self._calculate_entropy(self.clean_weights)
-            print(f"Clean Model  - Kurtosis: {clean_kurt:.4f} | Entropy: {clean_ent:.4f}")
-            print(f"Target Model - Kurtosis: {target_kurt:.4f} | Entropy: {target_ent:.4f}")
-            
-            if target_kurt < clean_kurt * 0.95:
-                print("Target model kurtosis is significantly lower (flattened peak).")
-                is_detected = True
-            if target_ent > clean_ent * 1.05:
-                print("Target model entropy is unusually high.")
-                is_detected = True
-        else:
-            print("Skipping comparison: No clean model provided.")
-            
-        return is_detected, (target_kurt, target_ent)
+    # REFERENCE TESTS (REQUIRE CLEAN MODEL)
 
     def detect_wasserstein_distance(self, threshold=0.0005):
   
@@ -189,36 +164,6 @@ class Detector:
             print("Wasserstein Distance is within normal variance bounds.")
             
         return is_detected, w_dist
-
-    def detect_informed_defender(self, analyzer, fraction=0.10, threshold=0.05):
-        print(f"Running Informed Defender Analysis (Targeting bottom {fraction*100}%)")
-        sorted_indices = analyzer.analyze_layerwise_zscore()
-        subset_size = int(len(sorted_indices) * fraction)
-        targeted_indices = sorted_indices[:subset_size]
-        
-        target_subset = self.target_weights[targeted_indices]
-        subset_entropy = self._calculate_entropy(target_subset)
-        
-        is_detected = False
-        entropy_diff = 0.0
-        
-        if self.clean_weights is not None:
-            clean_subset = self.clean_weights[targeted_indices]
-            clean_subset_entropy = self._calculate_entropy(clean_subset)
-            print(f"Clean Model Subset Entropy:  {clean_subset_entropy:.4f}")
-            print(f"Target Model Subset Entropy: {subset_entropy:.4f}")
-            
-            entropy_diff = subset_entropy - clean_subset_entropy
-            is_detected = entropy_diff > threshold
-            
-            if is_detected:
-                print(f"Entropy spike (+{entropy_diff:.4f}) detected in safe weights!")
-            else:
-                print("Subset appears clean.")
-        else:
-            print("Skipping comparison: No clean model provided.")
-            
-        return is_detected, entropy_diff
 
     def plot_distributions(self, filename="weight_distribution.png"):
         if self.clean_weights is None:
@@ -263,8 +208,6 @@ class Detector:
             return None
             
         res = {
-            "global_anomalies": self.detect_global_anomalies(),
             "wasserstein": self.detect_wasserstein_distance(),
-            "informed_defender": self.detect_informed_defender(analyzer)
         }
         return res
