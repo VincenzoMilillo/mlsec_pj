@@ -10,7 +10,7 @@ def run_gamma_sweep():
         'least_abs',
         'least_abs_cluster',
         'zscore',
-        'taylor',
+        'gradients',
         'combined',
     )
     for gamma in gammas_to_test:
