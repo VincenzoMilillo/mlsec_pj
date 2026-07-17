@@ -40,7 +40,7 @@ ANALYSIS_METHODS = (
     'least_abs',
     'least_abs_cluster',
     'zscore',
-    'taylor',
+    'gradients',
     'combined',
 )
 
@@ -102,8 +102,8 @@ def build_analysis_sequence(analyzer_instance, method, dataloader, device, chunk
         return analyzer_instance.analyze_least_absolute_value_cluster(cluster_size)
     if method == 'zscore':
         return analyzer_instance.analyze_layerwise_zscore()
-    if method == 'taylor':
-        return analyzer_instance.analyze_taylor_expansion(
+    if method == 'gradients':
+        return analyzer_instance.analyze_gradients(
             dataloader=dataloader,
             criterion=nn.NLLLoss(),
             device=device,
