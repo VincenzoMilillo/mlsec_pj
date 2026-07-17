@@ -57,7 +57,11 @@ def run_gamma_sweep():
 
     df.to_csv("experiment_results.csv", index=False)
     
-    latex_code = df.to_latex(index=False, escape=False, column_format="c|c|ccc|ccc")
+    latex_code = df.to_latex(
+        index=False,
+        escape=False,
+        column_format="c" * len(df.columns),
+    )
     with open("experiment_results.tex", "w", encoding="utf-8") as f:
         f.write("% Copy and paste this table directly into your LaTeX report/Overleaf\n")
         f.write(latex_code)

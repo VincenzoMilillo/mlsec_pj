@@ -272,15 +272,13 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         "method": method
     }
     
-    # If we ran the detector, append those results
-    if not fine_tuning and 'blind_res' in locals() and 'ref_res' in locals():
+    # If we ran the detector, append the currently available results.
+    if not fine_tuning and blind_res is not None and ref_res is not None:
         experiment_data.update({
             "Blind Kurtosis": blind_res["kurtosis"][0],
             "Blind LSB": blind_res["lsb_noise"][0],
             "Blind Benford": blind_res["benford"][0],
-            "Ref Global": ref_res["global_anomalies"][0],
             "Ref Wasserstein": ref_res["wasserstein"][0],
-            "Ref Informed": ref_res["informed_defender"][0],
         })
 
     return experiment_data

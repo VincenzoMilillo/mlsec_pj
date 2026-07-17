@@ -43,7 +43,8 @@ class Extractor:
         self.malware_length = malware_length
         self.hash_length = hash_length
         self.chunk_factor = chunk_factor
-        if self.malware_length > 4000:
+        message_length = self.malware_length + self.hash_length
+        if message_length > 4000:
             k = 3048
         else:
             k = 96
