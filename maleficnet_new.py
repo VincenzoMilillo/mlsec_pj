@@ -147,7 +147,7 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
     if not pre_model_name.exists():
         model.apply(weights_init_normal)
         if not only_pretrained:
-            log.info("Training clean model before injection... 🚆")
+            log.info("Training clean model before injection...")
             trainer = pl.Trainer(max_epochs=epochs,
                                  accelerator=accelerator,
                                  devices=1,

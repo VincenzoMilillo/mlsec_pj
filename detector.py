@@ -2,7 +2,6 @@ import torch
 import numpy as np
 import scipy.stats as stats
 import matplotlib.pyplot as plt
-from utils.utils_weights import get_weights
 import os
 
 class Detector:
