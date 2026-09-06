@@ -70,7 +70,7 @@ def main():
             accelerator=accelerator,
             devices=1,
             logger=logger,
-            enable_checkpointing=False # Don't clutter your drive for the baseline test
+            enable_checkpointing=False
         )
         trainer.fit(model, data)
         
@@ -78,7 +78,6 @@ def main():
         print(f"RUNNING DETECTOR ON CLEAN MODEL (Seed {seed})")
         print("Goal: The detector should NOT trigger any critical alerts.")
         
-        # We only pass target_model (we don't pass a clean_model because THIS IS the clean model)
         detector = Detector(target_model=model)
         
         # Run the blind tests
@@ -86,7 +85,7 @@ def main():
         detector.detect_blind_lsb_noise()
         detector.detect_benfords_law(plot=True)
         
-        # Rename the output plot so it doesn't overwrite
+        # Rename the output plot so it doesnt overwrite
         if os.path.exists("benfords_law.png"):
             os.rename("benfords_law.png", f"benfords_law_clean_seed_{seed}.png")
 
