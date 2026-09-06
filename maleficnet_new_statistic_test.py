@@ -142,8 +142,6 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
     # Build the clean model architecture that will later receive the payload.
     model = initialize_model(model_name, dim, num_classes, only_pretrained)
 
-    # The analyzer must inspect the final clean model state. If no clean
-    # checkpoint exists, train the model first and save it for future runs.
     if not pre_model_name.exists():
         model.apply(weights_init_normal)
         if not only_pretrained:
@@ -155,17 +153,15 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
             trainer.fit(model, data)
             trainer.test(model, data)
             torch.save(model.state_dict(), pre_model_name)
-            del trainer # Cleanup
+            del trainer
     else:
-        # Reuse the clean trained state so the analyzer does not inspect random weights.
         log.info("Loading pre-trained clean model")
         model.load_state_dict(torch.load(pre_model_name))
 
-    # Create the analyzer only after the clean model has been trained or loaded.
-    # model.apply(analyzer.analyze_least_absolute_value)
+
     analyzer = Analyzer(model = model)
 
-    # Build one sequence with the method selected from the command line.
+
     sequence = build_analysis_sequence(
         analyzer_instance=analyzer,
         method=method,
@@ -174,7 +170,7 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         chunk_factor=chunk_factor,
     )
 
-    # Init our malware injector
+    # Init the malware injector
     injector = Injector(seed=42,
                         device=device,
                         malware_path=Path(os.getcwd()) /
@@ -212,13 +208,11 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         
         log.info("Starting Blue Team Defense Analysis")
 
-        # Initialize the detector
         detector = Detector(target_model=model, clean_model=clean_model)
         
         blind_res = detector.run_all_blind_tests()
         ref_res = detector.run_all_reference_tests(analyzer=analyzer)
         
-        # Generate the graphs for your presentation
         detector.plot_distributions("malware_comparison.png")
         
         ##### DETECTOR STUFF #########
@@ -237,7 +231,6 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
         torch.save(model.state_dict(), post_model_name)
         del trainer
     else:
-        # Load the post-injection model for fine-tuning/extraction scenarios
         log.info("Loading infected model for fine-tuning and extraction... 🕵️‍♀️")
         model.load_state_dict(torch.load(post_model_name))
         
@@ -253,7 +246,7 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
                              logger=logger,
                              callbacks=[extractor_callback])
 
-        trainer.test(model, data) # Quick check of current performance
+        trainer.test(model, data)
         
         # Fine-tune the model to restore performance
         log.info("Fine-tuning model... 🚆")
@@ -265,14 +258,12 @@ def main(gamma, model_name, dataset, epochs, dim, num_classes, batch_size, num_w
     log.info('System infected {}'.format(
         'successfully! 🦠' if success else 'unsuccessfully :('))
     
-    #RETURN RESULTS FOR EXPERIMENT RUNNER
     experiment_data = {
         "Gamma": gamma,
         "Extraction_Success": success,
         "method": method
     }
     
-    # If we ran the detector, append the currently available results.
     if not fine_tuning and blind_res is not None and ref_res is not None:
         experiment_data.update({
             "Blind Kurtosis": blind_res["kurtosis"][0],
