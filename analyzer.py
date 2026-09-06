@@ -23,8 +23,6 @@ def get_weight_metadata(model):
     metadata = {}
     offset = 0
 
-    # Keep this aligned with injector_new.py/extractor_new.py: those files skip
-    # the last weight tensor when flattening the model weights.
     layers = [n for n in state_dict.keys() if "weight" in str(n)][:-1]
     for layer in layers:
         x = state_dict[layer].detach().cpu().numpy()
@@ -57,10 +55,8 @@ class Analyzer:
         sum_sorted_indexes = np.argsort(sums)
         final_indexes = []
         for index in sum_sorted_indexes:
-            # Optimized to use standard python ranges
             final_indexes.extend(range(index * cluster_size, (index + 1) * cluster_size))
             
-        # Safety catch: if weights length isn't perfectly divisible by cluster_size, append the remainder safely
         remainder = len(self.weights) % cluster_size
         if remainder > 0:
             final_indexes.extend(range(len(self.weights) - remainder, len(self.weights)))
@@ -73,8 +69,8 @@ class Analyzer:
         return [n for n in model_st_dict.keys() if "weight" in str(n)][:-1]
 
     def analyze_layerwise_zscore(self):
-        # STATIC: Evaluates the distribution of weights within their specific layer.
-        # Weights closest to their layer's mean (Z-score near 0) are considered safest.
+        # STATIC: Evaluates the distribution of weights within their specific layer
+        # Weights closest to their layer's mean (Z-score near 0) are considered safest
         z_scores = []
         model_st_dict = self.model.state_dict()
         target_layers = self._get_target_layers()
@@ -82,7 +78,7 @@ class Analyzer:
         for layer in target_layers:
             w = model_st_dict[layer].detach().cpu().numpy()
             mean = np.mean(w)
-            std = np.std(w) + 1e-8 # Add epsilon to avoid division by zero
+            std = np.std(w) + 1e-8 
             z = (w - mean) / std
             z_scores.extend(np.abs(z).flatten())
         
@@ -119,10 +115,9 @@ class Analyzer:
                 score = np.abs(w * g)
                 gradients_scores.extend(score.flatten())
             else:
-                # Fallback if no gradient is calculated
                 gradients_scores.extend(np.zeros_like(param.detach().cpu().numpy().flatten()))
                 
-        self.model.zero_grad() # Clean up gradients
+        self.model.zero_grad()
         if was_training:
             self.model.train()
         return np.argsort(np.array(gradients_scores))
@@ -130,13 +125,12 @@ class Analyzer:
     def analyze_combined_score(self, w_mag=0.6, w_zscore=0.4):
 
         # STATIC: Combines multiple heuristics into a single score.
-        #Fixes the bug where indices were normalized instead of raw values.
 
-        # 1. Get RAW magnitude scores and normalize to [0, 1]
+        # 1. Get raw magnitude scores and normalize to [0, 1]
         raw_mag = np.abs(self.weights)
         mag_norm = (raw_mag - raw_mag.min()) / (raw_mag.max() - raw_mag.min() + 1e-8)
         
-        # 2. Get RAW layer-wise z-scores and normalize to [0, 1]
+        # 2. Get raw layer-wise z-scores and normalize to [0, 1]
         z_scores = []
         model_st_dict = self.model.state_dict()
         target_layers = self._get_target_layers()
@@ -152,7 +146,6 @@ class Analyzer:
         # Combine the normalized raw scores using weighting factors
         combined_scores = (w_mag * mag_norm) + (w_zscore * z_norm)
         
-        # Argsort at the very end
         return np.argsort(combined_scores)
     
     # APoZ strategy:
@@ -160,15 +153,13 @@ class Analyzer:
     # of DenseNet ReLU modules, where inactive activations are represented by
     # real zeros. Each score describes one activation channel. The channel is
     # then linked to the convolutional weights that produce it or consume it,
-    # depending on where that ReLU appears in DenseNet.
+    # depending on where that ReLU appears in DenseNet
     def APoZ(self, dataloader, device="cpu", max_batches=50, zero_threshold=1e-8):
-        # Find every supported ReLU and the weight tensor connected to its
-        # activation channels.
         apoz_targets = self._get_apoz_targets()
         if not apoz_targets:
             raise RuntimeError("APoZ CHECK FAILED: no supported ReLU targets were found.")
 
-        # Run forward passes and count how often each ReLU channel is zero.
+        # Run forward passes and count how often each ReLU channel is zero
         apoz_scores = self._collect_apoz_scores(
             dataloader=dataloader,
             device=device,
@@ -178,7 +169,7 @@ class Analyzer:
         )
 
         # APoZ diagnostic check: verify that the observed units receive a
-        # meaningful range of scores instead of all being classified equally.
+        # meaningful range of scores instead of all being classified equally
         if not apoz_scores:
             raise RuntimeError("APoZ CHECK FAILED: no activation scores were collected.")
 
@@ -201,20 +192,18 @@ class Analyzer:
         else:
             print("APoZ CHECK PASSED: the analyzer produces different activity scores.")
 
-        # This will become the final ordered list of flattened weight indexes.
         sequence = []
 
-        # Keep track of indexes already inserted, so each weight appears once.
         used_indexes = set()
 
         # Start from channels with the highest APoZ score. These channels were
-        # zero most often and were therefore less active on the sampled data.
+        # zero most often and were therefore less active on the sampled data
         for activation_name, channel_index, _score in sorted(
                 apoz_scores, key=lambda item: item[2], reverse=True):
             target = apoz_targets[activation_name]
 
             # Convert the selected activation channel into the flattened
-            # indexes of the connected convolutional weights.
+            # indexes of the connected convolutional weights
             for index in self._indexes_for_channel(
                     target["weight_name"], channel_index, target["channel_axis"]):
                 if index not in used_indexes:
@@ -225,19 +214,17 @@ class Analyzer:
 
         # APoZ fallback:
         # If the activation-based layers do not cover enough weights, append the
-        # existing least-absolute-value ordering so injector/extractor still get
-        # a complete sequence of candidate indexes.
+        # existing least-absolute-value ordering so injector/extractor still gets
+        # a complete sequence of candidate indexes
         for index in self.analyze_least_absolute_value():
-            # Convert numpy scalar indexes to plain Python ints.
+            # Convert numpy scalar indexes to python ints
             index = int(index)
 
-            # Add only missing indexes that are valid for the flattened weights.
             if index not in used_indexes and index < len(self.weights):
                 sequence.append(index)
                 used_indexes.add(index)
 
-        # Return the final sequence as an integer numpy array, ready to be used
-        # by injector_new.py and extractor_new.py.
+        # Return the final sequence as an integer numpy array
         return np.array(sequence, dtype=np.int64)
 
     def _get_apoz_targets(self):
@@ -264,8 +251,8 @@ class Analyzer:
             convolution_name, channel_axis = relu_mappings[relu_name]
             weight_name = f"{parent_name}.{convolution_name}.weight"
 
-            # Only include tensors flattened by injector_new.py and
-            # extractor_new.py, so every generated index uses the same layout.
+            # Only includetensors flattened by injector_new.py and
+            # extractor_new.py, so every generated index uses the same layout
             if weight_name in self.weight_metadata:
                 targets[activation_name] = {
                     "weight_name": weight_name,
@@ -324,8 +311,6 @@ class Analyzer:
                     x, _ = batch
                     self.model(x.to(device))
         finally:
-            # Always remove hooks and restore the previous model mode, even if
-            # a forward pass raises an exception.
             for handle in handles:
                 handle.remove()
 
